@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: springboot-redis-zset
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      password: abcsee2see
+      timeout: 5000ms
+      lettuce:
+        pool:
+          max-active: 200
+          max-idle: 8
+          min-idle: 0
+          max-wait: 1000ms
+
+# ???????
+rank:
+  # ????1?/100=1000?/??????Redis????
+  shard-count: 100
+  key-prefix: "game:player:rank:"

@@ -7,11 +7,20 @@
 
 - 这是一个专注于企业级 Java 应用开发的实战示例集合，汇集了经过精心设计的、符合生产标准的代码实现。
 
-##📬 联系与反馈
+## 📬 联系与反馈
 
-- 提交 Issue：GitHub Issues
+- 提交 Issue：[GitHub Issues](https://github.com/rstyro/enterprise-examples/issues)
 
 
 ## ⭐ 支持我们
 
-- 如果本仓库对你的工作 / 学习有帮助，欢迎 Star ⭐、Fork 🍴、Watch 👀，让更多企业开发者受益！
+如果这个项目对您的学习和工作有帮助：
+
+- Star ⭐ - 给项目点个星，让更多人看到
+- Fork 🍴 - 创建自己的分支进行定制
+- Watch 👀 - 关注项目更新
+- 分享 📢 - 推荐给同事和朋友
+
+## 📁 项目结构
+
+- enterprise-ranks 亿级实时获取用户排名
