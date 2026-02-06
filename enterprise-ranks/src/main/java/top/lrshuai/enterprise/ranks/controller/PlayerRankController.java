@@ -151,6 +151,19 @@ public class PlayerRankController {
     }
 
     /**
+     * 查询榜单前N名玩家-优化版
+     *
+     * @param rankType 榜单类型
+     * @param start    起始排名（1开始）
+     * @param end      结束排名（1开始）
+     */
+    @SneakyThrows
+    @GetMapping("/topOptimize/{rankType}/{start}/{end}")
+    public R getTopRankListOptimize(@PathVariable int rankType, @PathVariable int start, @PathVariable int end) {
+        return R.ok(playerRankService.getTopRankListOptimize(rankType, start, end));
+    }
+
+    /**
      * 获取玩家排名详情（包含分数和排名）
      *
      * @param playerId 玩家ID

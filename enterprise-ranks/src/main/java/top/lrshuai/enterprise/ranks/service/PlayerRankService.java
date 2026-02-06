@@ -3,6 +3,7 @@ package top.lrshuai.enterprise.ranks.service;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RedissonClient;
 import org.redisson.client.protocol.ScoredEntry;
@@ -11,12 +12,12 @@ import org.springframework.stereotype.Service;
 import top.lrshuai.enterprise.ranks.vo.RankItem;
 
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.*;
 
 /**
  * 玩家排名核心服务
  */
+@Slf4j
 @Data
 @Service
 @RequiredArgsConstructor
@@ -33,6 +34,14 @@ public class PlayerRankService {
     // 主分数占用高30位，时间戳占用低34位
     private static final int TIMESTAMP_BITS = 34;   // 最多2^34 = 17,179,869,184
     private static final long TIMESTAMP_MASK = (1L << TIMESTAMP_BITS) - 1;
+
+    private final ExecutorService executor = new ThreadPoolExecutor(
+            5, // 核心线程数（初始并发）
+            5, // 最大线程数（峰值并发）
+            60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(1000), // 任务队列，避免线程过多
+            new ThreadPoolExecutor.CallerRunsPolicy() // 队列满时，由调用线程执行（避免任务丢失）
+    );
 
     /**
      * 组合分数（解决同分数排序问题,分数相同，后面的更新的得到的分数更低）
@@ -60,8 +69,12 @@ public class PlayerRankService {
         return (long)combinedScore >>> TIMESTAMP_BITS;
     }
 
+
     /**
      * 计算玩家所属的分片Key
+     * @param playerId 玩家ID
+     * @param rankType 排名类型
+     * @return 分片键
      */
     private String getShardKey(Long playerId, int rankType) {
         int shardIndex = (int) (playerId % shardCount);
@@ -142,8 +155,8 @@ public class PlayerRankService {
             CompletableFuture<List<Long>> future = CompletableFuture.supplyAsync(() -> {
                 RScoredSortedSet<Long> rankSet = redissonClient.getScoredSortedSet(shardKey);
                 // 计算主分数对应的组合分数区间
-                double minScore = mainScore * 10000000000L;
-                double maxScore = (mainScore + 1) * 10000000000L - 1;
+                double minScore = (double) (mainScore << TIMESTAMP_BITS);          // 区间起点
+                double maxScore = (double) (((mainScore + 1) << TIMESTAMP_BITS) - 1); // 区间终点
 
                 // valueRange（包含min和max边界）
                 Collection<Long> playerCollection = rankSet.valueRange(minScore, true, maxScore, true);
@@ -190,32 +203,117 @@ public class PlayerRankService {
 
         // 转换为RankItem列表，并添加排名
         List<RankItem> result = new ArrayList<>();
-        int currentRank = 0;
-        Double lastScore = null;
         Long actualRank = 1L;
-
         for (int i = 0; i < allEntries.size(); i++) {
             ScoredEntry<Integer> entry = allEntries.get(i);
             double combineScore = entry.getScore();
             int playerId = entry.getValue();
-
-            // 处理相同分数的排名
-            if (lastScore == null || Double.compare(combineScore, lastScore) != 0) {
-                actualRank = (long) (i + 1);
-                currentRank = i;
-                lastScore = combineScore;
-            } else {
-                // 同分数，排名相同
-                actualRank = (long) (currentRank + 1);
-            }
             // 解析主分数
             long mainScore = parseMainScore(combineScore);
+            actualRank = (long) (i + 1);
             result.add(new RankItem(playerId, mainScore, actualRank, combineScore));
         }
 
         // 返回指定范围的排名
         int fromIndex = Math.min(start - 1, result.size());
         int toIndex = Math.min(end, result.size());
+        return result.subList(fromIndex, toIndex);
+    }
+
+
+    /**
+     * 获取榜单前N名（优化版：使用最小堆避免内存爆炸）
+     * 优化点：
+     * 1. 使用PriorityQueue最小堆，仅保留Top N数据
+     * 2. 内存占用从 200分片*10000 → 固定N条
+     * 3. 避免全量排序，
+     * @param rankType 榜单类型（1=战力榜，2=积分榜...）
+     * @param start 起始排名（从1开始）
+     * @param end 结束排名（从1开始）
+     * @return 排名列表
+     */
+    @SneakyThrows
+    public List<RankItem> getTopRankListOptimize(int rankType, int start, int end) {
+        if (start < 1 || end < start) {
+            throw new IllegalArgumentException("排名范围无效: start=" + start + ", end=" + end);
+        }
+        // 需要获取的实际数量（从第1名到第end名）
+        int needCount = end;
+        // ========== 使用最小堆聚合所有分片的Top N ==========
+        // 定义最小堆：堆顶是分数最小的，方便淘汰
+        PriorityQueue<ScoredEntry<Integer>> minHeap = new PriorityQueue<>(
+                needCount + 1, // 容量稍大，避免频繁扩容
+                Comparator.comparingDouble(ScoredEntry::getScore) // 按分数升序
+        );
+
+        // 并行查询所有分片，每个分片取needCount名
+        List<CompletableFuture<Void>> futures = new ArrayList<>(shardCount);
+        for (int i = 0; i < shardCount; i++) {
+            final int shardIndex = i;
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                try {
+                    String shardKey = rankKeyPrefix + rankType + ":" + shardIndex;
+                    RScoredSortedSet<Integer> rankSet = redissonClient.getScoredSortedSet(shardKey);
+
+                    // 从每个分片获取前needCount名（降序：分数高在前）
+                    Collection<ScoredEntry<Integer>> entries = rankSet.entryRangeReversed(0, needCount - 1);
+
+                    // 同步加锁更新堆（多线程安全）
+                    synchronized (minHeap) {
+                        for (ScoredEntry<Integer> entry : entries) {
+                            minHeap.offer(entry);
+                            // 堆大小超过needCount，弹出最小值（淘汰机制）
+                            if (minHeap.size() > needCount) {
+                                minHeap.poll();
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("查询分片 {} 失败", shardIndex, e);
+                }
+            }, executor);
+            futures.add(future);
+        }
+
+        // 等待所有分片查询完成
+        try {
+            // 1分钟超时
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(1, TimeUnit.MINUTES);
+        } catch (Exception e) {
+            log.error("分片查询超时/异常，部分分片数据可能未合并", e);
+            // 超时后仍继续处理已合并的数据，保证接口不返回空
+        }
+
+        // 堆转列表并降序排序（分数高在前）
+        List<ScoredEntry<Integer>> topEntries = new ArrayList<>(minHeap);
+        topEntries.sort((a, b) -> Double.compare(b.getScore(), a.getScore())); // 降序
+
+        // ========== 第三步：转换为RankItem，处理同分排名逻辑 ==========
+        List<RankItem> result = new ArrayList<>(topEntries.size());
+        // 真实排名（同分排名相同）
+        long actualRank = 1;
+        // 当前索引（从0开始）
+        int currentIndex = 0;
+
+        for (ScoredEntry<Integer> entry : topEntries) {
+            double combineScore = entry.getScore();
+            Integer playerId = entry.getValue();
+            // 解析主分数
+            long mainScore = parseMainScore(combineScore);
+            // 分数变化：排名 = 当前索引 + 1
+            actualRank = currentIndex + 1;
+            // 构建RankItem
+            result.add(new RankItem(playerId, mainScore, actualRank, combineScore));
+            currentIndex++;
+        }
+
+        // 截取指定范围 [start, end]
+        // 注意：start/end 从1开始，列表索引从0开始
+        int fromIndex = Math.max(0, start - 1);
+        int toIndex = Math.min(end, result.size());
+        if (fromIndex >= toIndex) {
+            return new ArrayList<>(); // 范围无效，返回空列表
+        }
         return result.subList(fromIndex, toIndex);
     }
 
@@ -253,7 +351,6 @@ public class PlayerRankService {
                 item.setIsCurrentUser(Boolean.TRUE);
             }
         }
-
         return range;
     }
 
