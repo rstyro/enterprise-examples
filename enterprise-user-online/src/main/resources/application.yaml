@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: enterprise-online
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      password: abcsee2see
+      timeout: 5000ms
+      lettuce:
+        pool:
+          max-active: 200
+          max-idle: 8
+          min-idle: 0
+          max-wait: 1000ms
+
+# 在线统计自定义配置
+online:
+  counter:
+    shard-count: 16 # 分片数
+    expire-minute: 30 # 兜底过期时间
+    total-count-refresh-interval: 3000 # 总数刷新间隔（毫秒）
+    l1-cache:
+      max-size: 1000000 # L1本地缓存最大条数
+      expire-seconds: 30 # L1缓存过期时间
+    l2-cache:
+      max-size: 10000000 # L2本地缓存最大条数
+      expire-seconds: 30 # L2缓存过期时间

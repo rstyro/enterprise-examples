@@ -24,4 +24,5 @@
 ## 📁 项目结构
 
 - [enterprise-ranks](https://github.com/rstyro/enterprise-examples/tree/main/enterprise-ranks)  *亿级实时获取用户排名*
+- [enterprise-user-online](https://github.com/rstyro/enterprise-examples/tree/main/enterprise-user-online)  *亿级实时统计用户在线状态*
 - ...持续更新
