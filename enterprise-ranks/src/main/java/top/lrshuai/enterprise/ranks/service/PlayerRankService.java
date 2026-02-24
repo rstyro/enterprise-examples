@@ -120,14 +120,9 @@ public class PlayerRankService {
             String currentShardKey = rankKeyPrefix + rankType + ":" + i;
             CompletableFuture<Integer> future = CompletableFuture.supplyAsync(() -> {
                 RScoredSortedSet<Long> shardSet = redissonClient.getScoredSortedSet(currentShardKey);
-                // 对于当前玩家所在的分片，排除等于自己分数的情况
-                if (currentShardKey.equals(shardKey)) {
-                    return shardSet.count(combineScore, false, Double.MAX_VALUE, true);
-                }
-                // 对于其他分片，统计所有分数大于当前分数的玩家
-                else {
-                    return shardSet.count(combineScore, false, Double.MAX_VALUE, true);
-                }
+                // 统一统计所有分片中分数严格大于当前玩家的数量
+                // 参数说明：combineScore=当前分数, startScoreInclusive=false(>), maxScore=最大值, endScoreInclusive=true(≤)
+                return shardSet.count(combineScore, false, Double.MAX_VALUE, true);
             });
             futures.add(future);
         }
