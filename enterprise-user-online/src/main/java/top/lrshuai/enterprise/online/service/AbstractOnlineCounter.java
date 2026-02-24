@@ -91,7 +91,7 @@ public abstract class AbstractOnlineCounter implements OnlineCounter{
 
     /**
      * 将超大用户ID映射,Redis Bitmap支持的offset范围（0 ~ 2^32-1）
-     * 保证同一个userId始终映射到同一个offset，避免状态错乱
+     * 解决Snowflake等超大ID的Bitmap偏移越界问题
      */
     protected long mapUserIdToOffset(Long userId) {
         // 最大安全偏移量
